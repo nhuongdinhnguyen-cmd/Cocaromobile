@@ -1,4 +1,3 @@
-import asyncio
 import random
 import string
 from pathlib import Path
@@ -8,7 +7,6 @@ from fastapi.responses import HTMLResponse
 app = FastAPI(title="Caro Online")
 rooms = {}
 INDEX = Path(__file__).with_name("index.html")
-SIZE = 15
 WIN_COUNT = 5
 
 
@@ -19,16 +17,17 @@ def new_code():
             return code
 
 
-def fresh_board():
-    return [["" for _ in range(SIZE)] for _ in range(SIZE)]
+def fresh_board(size):
+    return [["" for _ in range(size)] for _ in range(size)]
 
 
 def has_won(board, row, col, mark):
+    size = len(board)
     for dr, dc in ((1, 0), (0, 1), (1, 1), (1, -1)):
         count = 1
         for sign in (-1, 1):
             r, c = row + dr * sign, col + dc * sign
-            while 0 <= r < SIZE and 0 <= c < SIZE and board[r][c] == mark:
+            while 0 <= r < size and 0 <= c < size and board[r][c] == mark:
                 count += 1
                 r += dr * sign
                 c += dc * sign
@@ -39,7 +38,7 @@ def has_won(board, row, col, mark):
 
 def state(room):
     return {
-        "board": room["board"], "turn": room["turn"],
+        "board": room["board"], "size": room["size"], "turn": room["turn"],
         "scores": room["scores"], "game_over": room["game_over"],
         "winner": room["winner"], "players": len(room["players"]),
         "last_move": room["last_move"],
@@ -76,10 +75,16 @@ async def websocket_endpoint(ws: WebSocket):
         request = await ws.receive_json()
         action = request.get("action")
         if action == "create":
+            try:
+                size = int(request.get("size", 15))
+            except (TypeError, ValueError):
+                size = 15
+            if size not in (15, 20):
+                size = 15
             room_code = new_code()
             mark = "X"
             rooms[room_code] = {
-                "players": {"X": ws}, "board": fresh_board(), "turn": "X",
+                "size": size, "players": {"X": ws}, "board": fresh_board(size), "turn": "X",
                 "scores": {"X": 0, "O": 0, "draw": 0, "games": 0},
                 "game_over": False, "winner": None, "last_move": None,
             }
@@ -111,7 +116,6 @@ async def websocket_endpoint(ws: WebSocket):
             action = request.get("action")
             if action == "move":
                 if mark not in room["players"]:
-                    await ws.send_json({"type": "error", "message": "Bạn không còn ở trong phòng."})
                     continue
                 if len(room["players"]) < 2:
                     await ws.send_json({"type": "error", "message": "Đang chờ người chơi thứ hai vào phòng."})
@@ -122,7 +126,8 @@ async def websocket_endpoint(ws: WebSocket):
                     r, c = int(request.get("row")), int(request.get("col"))
                 except (TypeError, ValueError):
                     continue
-                if not (0 <= r < SIZE and 0 <= c < SIZE) or room["board"][r][c]:
+                size = room["size"]
+                if not (0 <= r < size and 0 <= c < size) or room["board"][r][c]:
                     continue
                 room["board"][r][c] = mark
                 room["last_move"] = [r, c]
@@ -144,7 +149,7 @@ async def websocket_endpoint(ws: WebSocket):
                 await send_room(room, {"type": "state", "state": state(room), "message": msg})
             elif action == "new_round":
                 if len(room["players"]) >= 2:
-                    room["board"] = fresh_board()
+                    room["board"] = fresh_board(room["size"])
                     room["turn"] = "X"
                     room["game_over"] = False
                     room["winner"] = None
